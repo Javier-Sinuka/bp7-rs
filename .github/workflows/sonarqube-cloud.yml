@@ -1,0 +1,91 @@
+name: SonarQube Cloud Analysis
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - develop
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: sonar-bp7-rs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sonarcloud:
+    name: Test, coverage and SonarQube Cloud scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy, rustfmt, llvm-tools-preview
+          cache: true
+
+      - name: Show Rust versions
+        run: |
+          rustc --version
+          cargo --version
+          cargo clippy --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        continue-on-error: true
+        run: cargo clippy --all-targets --all-features --tests --examples -- -D warnings
+
+      - name: Check project
+        run: cargo check --all-targets --all-features
+
+      - name: Run tests without coverage first
+        run: cargo test --all-targets --all-features --lib --bins --tests --examples
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate LCOV coverage report from tests
+        run: |
+          cargo llvm-cov clean --workspace
+
+          cargo llvm-cov \
+            --all-targets \
+            --all-features \
+            --lib \
+            --bins \
+            --tests \
+            --examples \
+            --lcov \
+            --output-path lcov.info
+
+          test -s lcov.info
+          ls -lh lcov.info
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bp7-rs-lcov-report
+          path: lcov.info
+          if-no-files-found: error
+
+      - name: SonarQube Cloud Scan
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
